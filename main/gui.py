@@ -74,6 +74,9 @@ class GUI(tk.Tk):
         logFrame = LogFrame(self.notebook, self)
         self.frameDict[LogFrame] = logFrame
 
+        drawingFrame = DrawingFrame(self.notebook, self)
+        self.frameDict[DrawingFrame] = drawingFrame
+
         # Add main notebook tab
         self.notebook.add(self.frameDict[MainFrame], text='Menu')
 
@@ -171,6 +174,9 @@ class MainFrame(tk.Frame):
         logButton = tk.Button(mainButtonFrame, text='View Log', command=self.setupLogPage)
         logButton.pack()
 
+        drawingButton = tk.Button(mainButtonFrame, text='Create Drawing', command=self.setupDrawingPage)
+        drawingButton.pack()
+
         # Create button to quit
         quitButton = tk.Button(mainButtonFrame, text='Quit', command=self.exitGui)
         quitButton.pack()
@@ -267,6 +273,9 @@ class MainFrame(tk.Frame):
 
     def setupLogPage(self):
         self.master.add(self.parent.frameDict[LogFrame], text='Log')
+
+    def setupDrawingPage(self):
+        self.master.add(self.parent.frameDict[DrawingFrame], text='Draw')
         
 class VariablesFrame(tk.Frame):
     def __init__(self, master, parent):
@@ -588,6 +597,1143 @@ class LogFrame(tk.Frame):
 
         
         #notebook.add(logFrame, text='Log')
+
+class DrawingFrame(tk.Frame):
+    def __init__(self, master, parent):
+        super().__init__(master, name='drawing')
+        self.parent = parent
+
+    def createPage(self):
+        self.setupVariables()
+
+        canvasClearButton = tk.Button(self, text='Clear Canvas', command=self.deleteElements)
+        #canvasClearButton.grid(row=0, column=2)
+        canvasClearButton.pack()
+
+        self.radioFrame = tk.Frame(self)
+        self.radioFrame.pack(fill='x')
+
+        self.setupRadioFrame(self.radioFrame, self.radioVar)
+
+        canvasFrame = tk.Frame(self)
+        canvasFrame.pack(fill='both')
+
+        self.canvas = tk.Canvas(canvasFrame, width=1000, height=1000, borderwidth=10, background='white')
+        self.canvas.grid(row=0, column=0, padx=50)
+
+        self.setupInfoBar(canvasFrame)
+
+        self.canvas.bind('<ButtonPress>', self.press)
+        self.canvas.bind('<ButtonRelease>', self.release)
+        self.canvas.bind('<Motion>', self.mousePos)
+
+    def setupVariables(self):
+        self.drawingElementIDs = []
+        self.elementTypes = {}
+        self.elementData = {}
+
+        self.radioVar = tk.IntVar(self)
+        self.radioVar.set(0)
+
+        self.chosenRadios = []
+
+        self.isPressed = tk.BooleanVar(self)
+        self.isPressed.set(False)
+
+        self.isEditing = tk.BooleanVar(self)
+        self.isEditing.set(False)
+
+        self.arcPoints = []
+
+        self.freeDrawPointIDs = []
+        self.polylinePointIDs = []
+        self.polylinePoints = []
+
+        self.pathPointIDs = []
+        self.pathPoints = []
+        self.pathPointInfo = []
+
+        self.editPointIDs = []
+        self.editSelectedIDs = []
+        self.edit_shapeID = []
+        self.edit_key = ''
+        self.edit_editingPoint = [0, 0]
+        self.edit_info = {}
+        self.edit_indexes = {}
+
+        self.editPointSize = 2
+        self.editPointColour = 'red'
+
+        self.hasMoved = tk.BooleanVar(self)
+        self.hasMoved.set(False)
+
+        self.pointPurgatory = []
+
+        self.coords = np.zeros(4)
+
+        self.shapeID = None
+
+        self.infoBarText = tk.StringVar(self)
+        self.infoBarText.set('Currently Editing:')
+
+    def setupRadioFrame(self, radioFrame, radioVar):
+        lineRadio = tk.Radiobutton(radioFrame, text='Line', variable=radioVar, value=0)
+        lineRadio.bind('<ButtonPress>', self.updateInfoBar)
+        lineRadio.grid(row=0, column=0)
+
+        arcRadio = tk.Radiobutton(radioFrame, text='Arc', variable=radioVar, value=1)
+        arcRadio.bind('<ButtonPress>', self.updateInfoBar)
+        arcRadio.grid(row=0, column=1)
+
+        ellipseRadio = tk.Radiobutton(radioFrame, text='Ellipse', variable=radioVar, value=2)
+        ellipseRadio.bind('<ButtonPress>', self.updateInfoBar)
+        ellipseRadio.grid(row=0, column=2)
+
+        rectangleRadio = tk.Radiobutton(radioFrame, text='Rectangle', variable=radioVar, value=3)
+        rectangleRadio.bind('<ButtonPress>', self.updateInfoBar)
+        rectangleRadio.grid(row=0, column=3)
+
+        #freeDrawRadio = tk.Radiobutton(radioFrame, text='Free Draw', variable=radioVar, value=4)
+        #freeDrawRadio.bind('<ButtonPress>', self.updateInfoBar)
+        #freeDrawRadio.grid(row=0, column=4)
+
+        polylineRadio = tk.Radiobutton(radioFrame, text='Polyline', variable=radioVar, value=5)
+        polylineRadio.bind('<ButtonPress>', self.updateInfoBar)
+        polylineRadio.grid(row=0, column=5)
+
+        pathRadio = tk.Radiobutton(radioFrame, text='Path', variable=radioVar, value=6)
+        pathRadio.bind('<ButtonPress>', self.updateInfoBar)
+        pathRadio.grid(row=0, column=6)
+
+        saveFile = tk.Button(radioFrame, text='Save', command=self.saveAsFile)
+        saveFile.grid(row=0, column=8)
+
+        eraserRadio = tk.Radiobutton(radioFrame, text='Eraser', variable=radioVar, value=9)
+        eraserRadio.bind('<ButtonPress>', self.updateInfoBar)
+        eraserRadio.grid(row=0, column=9)
+
+    def setupInfoBar(self, canvasFrame):
+
+        self.infoBar = tk.Frame(canvasFrame)
+        self.infoBar.grid(row=0, column=1, sticky='nsew')
+
+        currentSelection = tk.Label(self.infoBar, textvariable=self.infoBarText)
+        currentSelection.pack()
+
+        self.endDrawing = tk.Button(self.infoBar, text='End Drawing', command=self.closeDrawing, state='disabled')
+        self.endDrawing.pack()
+
+        undoRedoFrame = tk.Frame(self.infoBar)
+        undoRedoFrame.pack()
+
+        self.undoButton = tk.Button(undoRedoFrame, text='Undo', command=self.undo, state='active')
+        self.undoButton.grid(row=0, column=0)
+
+        self.redoButton = tk.Button(undoRedoFrame, text='Redo', command=self.redo, state='disabled')
+        self.redoButton.grid(row=0, column=1)
+
+        self.editPath = tk.Button(canvasFrame, text='Edit Path', command=self.edit)
+        self.editPath.lower()
+        self.editPath.pack(in_=self.infoBar)
+
+        self.inf = self.info(self.infoBar, self.infoBarText)
+
+    def openDrawing():
+        """Testing concept of being able to draw own svgs"""
+        #drawingFrame = tk.Frame(notebook)
+        #drawingFrame.pack(fill='both', expand=True)
+
+        #pixelSize = 100
+        #pixelDimensions = '2x2'
+        #pixels = np.zeros([int(pixelDimensions.split('x')[0]), int(pixelDimensions.split('x')[1])], dtype='object')
+
+        #buttonFrame = tk.Frame(drawingFrame)
+        #buttonFrame.pack(fill='x')
+
+        #undoButton = tk.Button(buttonFrame, text='Undo', command=lambda: canvas.delete(drawingElementIDs[-1]))
+        #undoButton.grid(row=0, column=0)
+
+        #redoButton = tk.Button(buttonFrame, text='Redo')
+        #redoButton.grid(row=0, column=1)
+
+        
+    def deleteElements(self):
+        self.canvas.delete('all')
+        self.drawingElementIDs = []
+        self.elementTypes = {}
+        self.coords[0:4] = 0
+        self.closeDrawing()
+
+    def updateInfoBar(self, e):
+        widget = e.widget
+        self.closeDrawing()
+        
+        if widget.cget('value') == 5:
+            self.endDrawing.configure(state='active')
+        elif widget.cget('value') == 6:
+            self.editPath.tkraise()
+            self.endDrawing.configure(state='active')
+        else:
+            self.editPath.lower()
+            self.endDrawing.configure(state='disabled')
+
+        self.inf.setSelected(widget.cget('text'))
+        self.inf.updateInfoBar()
+
+    def closeDrawing(self):
+        if self.radioVar.get() == 5:
+            self.coords[0:4] = 0
+            self.drawingElementIDs.append(self.polylinePointIDs)
+            self.elementTypes[', '.join([str(id) for id in self.polylinePointIDs])] = 'polyline'
+            self.polylinePointIDs = []
+            self.polylinePoints = []
+            self.canvas.delete(self.shapeID)
+            self.undoButton.configure(state='active')
+        
+        elif self.radioVar.get() == 6:
+            self.coords[0:4] = 0
+            self.drawingElementIDs.append(self.pathPointIDs)
+            self.elementTypes[', '.join([str(id) for id in self.pathPointIDs])] = 'path'
+            self.elementData[', '.join([str(id) for id in self.pathPointIDs])] = self.pathPointInfo
+            self.pathPointIDs = []
+            self.pathPoints = []
+            self.pathPointInfo = []
+            if type(self.shapeID) == list: [self.canvas.delete(id) for id in self.shapeID]
+            else: self.canvas.delete(self.shapeID)
+            self.undoButton.configure(state='active')
+            print(self.shapeID)
+
+    def undo(self):
+        if len(self.drawingElementIDs) == 0: return
+        if len(self.pointPurgatory) + 1 > 0: self.redoButton.configure(state='active')
+
+        if self.radioVar.get() == 5 and len(self.polylinePointIDs) != 0:
+            if len(self.polylinePointIDs) - 1 <= 0 and len(self.drawingElementIDs) - 1 <= 0: self.undoButton.configure(state='disabled')
+            
+            prevID = self.polylinePointIDs[-1]
+
+            self.canvas.itemconfigure(prevID, state='hidden')
+            self.canvas.addtag_withtag('undone', prevID)
+            self.pointPurgatory.append(prevID)
+
+            del self.polylinePointIDs[-1]
+            
+            """
+            self.canvas.delete(self.polylinePointIDs[-1])
+            self.pointPurgatory.append(self.polylinePointIDs[-1])
+
+            del self.polylinePointIDs[-1]"""
+            del self.polylinePoints[-2:]
+
+            self.coords[0:2] = self.polylinePoints[-2:]
+
+            if len(self.polylinePointIDs) - 1 <= 0: self.closeDrawing()
+
+        else:
+            if len(self.drawingElementIDs) - 1 <= 0: self.undoButton.configure(state='disabled')
+            #print(self.drawingElementIDs)
+            #print(self.elementTypes)
+            #print(self.canvas.coords(self.drawingElementIDs[-1]))
+            #print(self.shapeID)
+            
+            prevID = self.drawingElementIDs[-1]
+
+            if self.shapeID in self.canvas.find_all(): self.canvas.delete(self.shapeID)
+
+            self.canvas.itemconfigure(prevID, state='hidden')
+            self.canvas.addtag_withtag('undone', prevID)
+            self.pointPurgatory.append(prevID)
+
+            del self.drawingElementIDs[-1]
+
+
+            """
+            print('Before')
+            print(self.canvas.find_all())
+            print(self.drawingElementIDs)
+            print(self.shapeID)
+
+            
+
+            prevID = self.drawingElementIDs[-1]
+            
+            if type(prevID) == list: [self.canvas.itemconfigure(id, state='hidden') for id in prevID]#self.canvas.delete(id) for id in prevID]
+            else: self.canvas.itemconfigure(prevID, state='hidden')#self.canvas.delete(prevID)
+            
+            
+            if self.shapeID in self.canvas.find_all(): self.canvas.delete(self.shapeID)
+            self.pointPurgatory.append(prevID)
+
+            if type(prevID) == list: del self.elementTypes[', '.join([str(id) for id in prevID])]
+            else: del self.elementTypes[prevID]
+            
+            del self.drawingElementIDs[-1]
+
+            print('\nAfter')
+            print(self.canvas.find_all())
+            print(self.drawingElementIDs)
+            print(self.shapeID)
+            #self.shapeID = None
+            
+            """
+
+            #print(self.drawingElementIDs)
+            #print(self.elementTypes)
+            #print(self.canvas.coords(self.drawingElementIDs[-1]))
+            #print(self.shapeID)
+
+    def redo(self):
+        if len(self.pointPurgatory) - 1 <= 0: self.redoButton.configure(state='disabled')
+        
+        if self.radioVar.get() == 5 and len(self.pointPurgatory) != 0:
+            if len(self.polylinePointIDs) + 1> 0 and len(self.drawingElementIDs) + 1 > 0: self.undoButton.configure(state='active')
+            
+            prevID = self.pointPurgatory[-1]
+
+            self.canvas.itemconfigure(prevID, state='normal')
+            self.canvas.dtag(prevID, 'undone')
+            self.polylinePointIDs.append(prevID)
+
+            coords = self.canvas.coords(prevID)
+
+            [self.polylinePoints.append(coord) for coord in coords[-2:]]
+            
+            self.coords[0:2] = self.polylinePoints[-2:]
+
+            del self.pointPurgatory[-1]
+
+        else:
+            if len(self.drawingElementIDs) + 1 > 0: self.undoButton.configure(state='active')
+
+            prevID = self.pointPurgatory[-1]
+
+            self.canvas.itemconfigure(prevID, state='normal')
+            self.canvas.dtag(prevID, 'undone')
+            self.drawingElementIDs.append(prevID)
+
+            del self.pointPurgatory[-1]
+
+            """"
+            if len(self.pointPurgatory) != 0:
+                print(self.pointPurgatory[0])
+                self.canvas.itemconfigure(self.pointPurgatory[0], state='normal')
+                print(self.canvas.coords(self.pointPurgatory[0]))
+
+            """
+
+    def edit(self):
+        if self.isEditing.get(): 
+            self.isEditing.set(False)
+            self.inf.setEditing(self.isEditing.get())
+        else: 
+            self.isEditing.set(True)
+            self.inf.setEditing(self.isEditing.get())
+        self.inf.updateInfoBar()
+
+        if self.radioVar.get() == 6 and self.isEditing.get():
+            pathElements = {key: self.elementData[key] for key in self.elementTypes.keys() if self.elementTypes[key] == 'path'}
+            if len([val for val in self.elementTypes.values() if val == 'path']) == 0: return
+
+            point = [-10, -10]
+
+            for path in pathElements.keys():
+                data = pathElements[path]
+                ids = path.split(', ')
+
+                for cmd in data:
+                    match cmd[0]:
+                        case 'M': 
+                            point = [cmd[1], cmd[2]]
+                        case 'L': 
+                            point = [cmd[1], cmd[2]]
+                        case 'C': 
+                            prevCurvePoint = [cmd[-4], cmd[-3]]
+
+                            self.editPointIDs.append(self.canvas.create_line(point[0], point[1], cmd[1], cmd[2], fill=self.editPointColour, tags=['edit', 'line']))
+                            self.editPointIDs.append(self.edit_create_point([cmd[1], cmd[2]]))
+
+                            point = [cmd[-2], cmd[-1]]
+
+                            self.editPointIDs.append(self.canvas.create_line(point[0], point[1], cmd[-4], cmd[-3], fill=self.editPointColour, tags=['edit', 'line']))
+                            self.editPointIDs.append(self.edit_create_point([cmd[-4], cmd[-3]]))
+                        case 'S': 
+                            point = [cmd[-2], cmd[-1]]
+
+                            self.editPointIDs.append(self.canvas.create_line(point[0], point[1], cmd[1], cmd[2], fill=self.editPointColour, tags=['edit', 'line']))
+                            self.editPointIDs.append(self.edit_create_point([cmd[-4], cmd[-3]]))
+                        case _: continue
+
+                    id = self.edit_create_point(point)
+                    self.editPointIDs.append(id)
+
+
+            #print(pathElements)
+        elif not self.isEditing.get() and len(self.editPointIDs) > 0:
+            for id in self.editPointIDs:
+                self.canvas.delete(id)
+                self.editPointIDs = []
+
+    def edit_create_point(self, point):
+        return self.canvas.create_oval(point[0] - self.editPointSize, point[1] - self.editPointSize, point[0] + self.editPointSize, point[1] + self.editPointSize, fill=self.editPointColour, tags=['edit', 'point'])
+
+    def calculateArc(self, coords):
+        startX, startY = coords[0], coords[1]
+        endX, endY = coords[2], coords[3]
+        l = endX - startX
+        h = startY - endY
+
+        extent = 90
+
+        if l >= 0 and h >= 0: return [0, extent]
+        elif l < 0 and h >= 0: return [90, extent]
+        elif l < 0 and h < 0: return [180, extent]
+        elif l >= 0 and h < 0: return [270, extent]
+
+
+
+
+    def press(self, e): 
+        self.isPressed.set(True)
+        self.hasMoved.set(False)
+        if self.isEditing.get():
+            self.edit_press(e)
+            return
+        self.coords[0], self.coords[1] = e.x, e.y
+        self.pointPurgatory = []
+        self.redoButton.configure(state='disabled')
+
+        if self.radioVar.get() == 1:
+            if len(self.arcPoints) == 4: self.arcPoints = []
+            self.arcPoints.extend([e.x, e.y])
+
+        elif self.radioVar.get() == 5:
+            self.polylinePoints.extend(self.coords[0:2])
+            
+            if len(self.polylinePoints) >= 4:
+                id = self.canvas.create_line(self.polylinePoints[-4:])
+                #drawingElementIDs.append(id)
+                self.polylinePointIDs.append(id)
+
+        elif self.radioVar.get() == 6:
+            self.pathPoints.extend(self.coords[0:2])
+            if len(self.pathPoints) == 2: self.pathPointInfo.append(['M', self.pathPoints[0], self.pathPoints[1]])
+            #if len(self.pathPointInfo) == 0: return
+            if self.pathPointInfo[-1][0] == 'C' and len(self.pathPointInfo[-1]) < 5:
+                self.pathPointInfo[-1].extend(self.coords[0:2])
+            #elif self.pathPointInfo[-1][0] == 'C' and len(self.pathPointInfo[-1]) == 7:
+            #    self.pathPointInfo.append(['S', self.pathPoints[-2], self.pathPoints[-1]])
+    def edit_press(self, e):
+        error = 3
+
+        if self.radioVar.get() == 6: 
+            overlapping = self.canvas.find_overlapping(e.x - error, e.y - error, e.x + error, e.y + error)
+            structural = self.canvas.find_withtag('edit')
+
+            self.editSelectedIDs = [id for id in overlapping if id in structural]
+            
+            possiblePathKeys = []
+            pathKeys = [key for key in self.elementTypes.keys() if self.elementTypes[key] == 'path']
+            print('pathKeys:', pathKeys)
+
+
+            for key in pathKeys:
+                data = []
+                [data.extend(cmd) for cmd in self.elementData[key]]
+                data = [d for d in data if type(d) != str]
+                print('data:', data)
+                points = [[data[i], data[i+1]] for i in range(0, len(data) - 1, 2)]
+                print('points:', points)
+
+                for id in self.editSelectedIDs:
+                    selectedCoords = self.canvas.coords(id)
+                    x = selectedCoords[0] + self.editPointSize
+                    y = selectedCoords[1] + self.editPointSize
+
+                    self.edit_editingPoint[0] = x
+                    self.edit_editingPoint[1] = y
+
+                    if self.edit_editingPoint in points: possiblePathKeys.append(key)
+                
+            print('possible path keys:', possiblePathKeys)
+
+            count = {key: 0 for key in possiblePathKeys}
+            for key in possiblePathKeys: count[key] += 1
+            
+            self.edit_key = max(count)
+
+            canvasIDs = self.keyToList(self.edit_key)
+            cmdType, prevCmdData, cmdData, nextCmdData = self.cmdFinder(self.edit_key, self.edit_editingPoint)
+            cmdIndex = self.elementData[self.edit_key].index(cmdData) - 1 # To account for difference regarding the move command that isn't shown in the ids
+            if nextCmdData != []: nextCmdIndex = self.elementData[self.edit_key].index(nextCmdData) - 1
+
+
+            [self.edit_shapeID.append(canvasIDs[i]) for i in range(len(canvasIDs)) if i in [cmdIndex, nextCmdIndex]]
+
+            #for l in canvasIDs:
+            #    self.edit_shapeID.append(l)
+                #[self.canvas.delete(id) for id in l if l in canvasIDs[0:2]]
+
+
+    def release(self, e): 
+        self.isPressed.set(False)
+        if self.isEditing.get():
+            self.edit_release(e)
+            return
+        self.coords[2], self.coords[3] = e.x, e.y
+
+        if self.radioVar.get() == 0: 
+            id = self.canvas.create_line(list(self.coords))
+            print('LINE ID:', id)
+            self.drawingElementIDs.append(id)
+            self.elementTypes[id] = 'line'
+        elif self.radioVar.get() == 1: self.drawingElementIDs.append(self.canvas.create_arc(list(self.coords), start=self.calculateArc(self.coords)[0], extent=self.calculateArc(self.coords)[1], style='arc'))
+        elif self.radioVar.get() == 2: 
+            id = self.canvas.create_oval(list(self.coords))
+            self.drawingElementIDs.append(id)
+            self.elementTypes[id] = 'ellipse'
+        elif self.radioVar.get() == 3: 
+            id = self.canvas.create_rectangle(list(self.coords))
+            self.drawingElementIDs.append(id)
+            self.elementTypes[id] = 'rectangle'
+        elif self.radioVar.get() == 4: self.drawingElementIDs.append(self.freeDrawPointIDs)
+        
+        elif self.radioVar.get() == 6:
+
+            if not self.hasMoved.get():
+
+                if len(self.pathPoints) >= 4:
+                    id = self.canvas.create_line(self.pathPoints[-4:])
+                    self.pathPointInfo.append(['L', self.pathPoints[-2], self.pathPoints[-1]])
+                    self.pathPointIDs.append(id)
+
+            else:
+                if self.pathPointInfo[-1][0] not in ['C', 'S']:
+                    if self.pathPointInfo[-1][0] in ['L', 'M']: 
+                        self.canvas.delete(self.shapeID)
+                        xStart, yStart = self.pathPoints[-4], self.pathPoints[-3]
+                        x1, y1 = self.pathPoints[-4], self.pathPoints[-3]
+                        x2, y2 = self.coords[-2:]
+                        xEnd, yEnd = self.pathPoints[-2:]
+
+                        self.pathPointInfo.append(['C', x1, y1, x2, y2, xEnd, yEnd])
+
+                        xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                        ids = self.canvasPointSmoother(xPoints, yPoints)
+                        self.pathPointIDs.append(ids)
+
+                        #id = self.canvas.create_line(self.pathPoints[-4], self.pathPoints[-3], self.pathPoints[-2], self.pathPoints[-1])
+                        #self.pathPointIDs.append(id)
+                        #self.pathPointInfo.append(['L', self.pathPoints[-2], self.pathPoints[-1]])
+                    #else: self.pathPointInfo.append(['C', self.coords[-2], self.coords[-1]])
+                
+                elif ( len(self.pathPointInfo[-1]) == 7 and self.pathPointInfo[-1][0] == 'C' ) or ( len(self.pathPointInfo[-1]) == 5 and self.pathPointInfo[-1][0] == 'S' ):
+                    self.pathPointInfo.append(['S', self.coords[-2], self.coords[-1], self.pathPoints[-2], self.pathPoints[-1]])
+
+                    from pointList import Vec2D
+                    vecStart = Vec2D(self.pathPoints[-4], self.pathPoints[-3], 'rec')
+                    vecPrevX1 = Vec2D(self.pathPointInfo[-2][-4], self.pathPointInfo[-2][-3], 'rec')
+
+                    relVec = -1*vecStart + vecPrevX1
+                    oppVec = -1*relVec
+                    posVec = vecStart + oppVec
+
+                    xStart, yStart = vecStart.vec.x, vecStart.vec.y
+                    x1, y1 = posVec.vec.x, posVec.vec.y
+                    x2, y2 = self.coords[-2:]
+                    xEnd, yEnd = self.pathPoints[-2:]
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    ids = self.canvasPointSmoother(xPoints, yPoints)
+                    self.pathPointIDs.append(ids)
+
+                    
+                elif len(self.pathPointInfo[-1]) == 5 and self.pathPointInfo[-1][0] == 'C':
+                    self.pathPointInfo[-1].insert(-2, self.coords[-2])
+                    self.pathPointInfo[-1].insert(-2, self.coords[-1])
+
+                    xStart, yStart = self.pathPointInfo[-2][-2:]
+                    x1, y1 = self.pathPointInfo[-1][1:3]
+                    x2, y2 = self.coords[-2:]
+                    xEnd, yEnd = self.pathPointInfo[-1][-2:]
+                    
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    ids = self.canvasPointSmoother(xPoints, yPoints)
+                    self.pathPointIDs.append(ids)
+
+
+                """
+                if len(self.pathPointInfo) == 0 or self.pathPointInfo[-1][0] not in ['C', 'S']: self.pathPointInfo.append(['C', self.coords[-2], self.coords[-1]])
+                elif len(self.pathPointInfo[-1]) >= 7 or len(self.pathPointInfo[-2]) >= 7: # <-------------------------
+                    if self.pathPointInfo[-2][0] == 'C': # <--------------------------
+                        from pointList import Vec2D
+                        vecStart = Vec2D(self.pathPointInfo[-2][-2], self.pathPointInfo[-2][-1], 'rec')
+                        vecPrevX1 = Vec2D(self.pathPointInfo[-2][-4], self.pathPointInfo[-2][-3], 'rec')
+
+                        relVec = -1*vecStart + vecPrevX1
+                        oppVec = -1*relVec
+                        posVec = vecStart + oppVec
+                        
+                        self.pathPointInfo[-1].insert(-2, posVec.vec.x)
+                        self.pathPointInfo[-1].insert(-2, posVec.vec.y)
+
+                        print('Inserted')
+                        print(self.pathPointInfo)
+
+                        xStart, yStart = self.pathPointInfo[-2][-2:]
+                        x1, y1 = posVec.vec.x, posVec.vec.y
+                        x2, y2 = self.coords[-2:]
+                        xEnd, yEnd = self.pathPointInfo[-1][-2:]
+
+                        xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                        self.shapeID = self.canvasPointSmoother(xPoints, yPoints)
+
+
+                        self.pathPointInfo.append([])
+                    else: self.pathPointInfo.append(['C', self.coords[-2], self.coords[-1]])
+                else: 
+                    self.pathPointInfo[-1].insert(-2, self.coords[-2])
+                    self.pathPointInfo[-1].insert(-2, self.coords[-1])
+
+                    xStart, yStart = self.pathPointInfo[-2][-2:]
+                    x1, y1 = self.pathPointInfo[-1][1:3]
+                    x2, y2 = self.coords[-2:]
+                    xEnd, yEnd = self.pathPointInfo[-1][-2:]
+                    
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    ids = self.canvasPointSmoother(xPoints, yPoints)
+                    self.pathPointIDs.append(ids)"""
+
+                """elif len(self.pathPointInfo[-1]) >= 7: 
+                    if self.pathPointInfo[-1][0] == 'C':
+                        xStart, yStart = self.pathPointInfo[-2][-2:]
+                        x1, y1 = self.pathPointInfo[-1][1:3]
+                        x2, y2 = self.coords[-2:]
+                        xEnd, yEnd = self.pathPointInfo[-1][-2:]
+                        
+                        xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                        ids = self.canvasPointSmoother(xPoints, yPoints)
+                        self.pathPointIDs.append(ids)
+
+                        print('self.shapeID:', self.shapeID)
+
+                    self.pathPointInfo.append(['C', self.coords[-2], self.coords[-1]])"""
+
+            print('pathPointInfo:', self.pathPointInfo)
+            
+
+        self.hasMoved.set(False)
+    def edit_release(self, e):
+        if self.radioVar.get() == 6:
+            pathData = self.elementData[self.edit_key]
+            
+            pathIDs = self.keyToList(self.edit_key)
+
+
+            self.edit_create_point([e.x, e.y])
+
+            #print('\nDrawingElementIDs:\n', self.drawingElementIDs[0])
+            pathIndex = -1
+            cmdIndexes = []
+            newData = []
+
+            if pathIDs in self.drawingElementIDs: pathIndex = self.drawingElementIDs.index(pathIDs)
+            for cmd in self.edit_info.keys():
+                data = cmd.split(', ')
+                convertedCmd = []
+                convertedCmd.append(data[0])
+                [convertedCmd.append(float(point)) for point in data[1:]]
+
+                if convertedCmd in pathData: 
+                    cmdIndexes.append(pathData.index(convertedCmd))
+                    newData.append(self.edit_info[cmd])
+
+            #[cmdIndexes.append(pathData.index([float(point) for point in cmd.split(', ')[1:]].insert(0, cmd.split(', ')[0]))) for cmd in self.edit_info.keys() if [float(cmd.split(', ')[i]) for i in range(len(cmd.split(', ')))] in pathData]
+            
+            print(cmdIndexes)
+            for i in range(len(cmdIndexes)):
+                #self.elementData[self.edit_key]
+                #self.elementData[self.edit_key][cmdIndexes[i]] = newData[i]
+                
+                print(pathData[cmdIndexes[i]])
+                print(newData[i])
+                print(pathIDs[cmdIndexes[i]])
+
+                cmdType = pathData[cmdIndexes[i]][0]
+                prevCmdData = []
+                if cmdIndexes[i] - 1 >= 0: prevCmdData = pathData[cmdIndexes[i] - 1]
+
+                cmdData = pathData[cmdIndexes[i]]
+                nextCmdData = []
+                if cmdIndexes[i] + 1 <= len(pathData): nextCmdData = pathData[cmdIndexes[i] + 1]
+
+
+                newCmdIDs = []
+
+                from pointList import Vec2D
+
+                if cmdType == 'C':
+                    xPoints, yPoints = self.cubicBezierCurvePoints(prevCmdData[-2], prevCmdData[-1], cmdData[1], cmdData[2], cmdData[3], cmdData[4], e.x, e.y)
+                    newCmdIDs.append(self.canvasPointSmoother(xPoints, yPoints))
+                    
+                elif cmdType == 'S':
+                    vecStart = Vec2D(prevCmdData[-2], prevCmdData[-1], 'rec')
+                    vecPrevX1 = Vec2D(prevCmdData[-4], prevCmdData[-3], 'rec')
+
+                    relVec = -1*vecStart + vecPrevX1
+                    oppVec = -1*relVec
+                    posVec = vecStart + oppVec
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(vecStart.vec.x, vecStart.vec.y, posVec.vec.x, posVec.vec.y, cmdData[-4], cmdData[-3], e.x, e.y)
+                    newCmdIDs.append(self.canvasPointSmoother(xPoints, yPoints))
+
+                if nextCmdData[0] == 'S':
+                    vecStart = Vec2D(e.x, e.y, 'rec')
+                    vecPrevX1 = Vec2D(cmdData[-4], cmdData[-3], 'rec')
+
+                    relVec = -1*vecStart + vecPrevX1
+                    oppVec = -1*relVec
+                    posVec = vecStart + oppVec
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(e.x, e.y, posVec.vec.x, posVec.vec.y, nextCmdData[-4], nextCmdData[-3], nextCmdData[-2], nextCmdData[-1])
+                    newCmdIDs.append(self.canvasPointSmoother(xPoints, yPoints))
+
+                pathIDs[cmdIndexes[i]] = newCmdIDs[0]
+                pathIDs[cmdIndexes[i] + 1] = newCmdIDs[1]
+
+                pathData[cmdIndexes[i]] = newData[i]
+
+                self.drawingElementIDs[pathIndex] = pathIDs
+
+                self.elementTypes[', '.join([str(id) for id in pathIDs])] = self.elementTypes[self.edit_key]
+                del self.elementTypes[self.edit_key]
+
+                self.elementData[', '.join([str(id) for id in pathIDs])] = pathData
+                del self.elementData[self.edit_key]
+
+    def mousePos(self, e):
+        widget = e.widget
+        self.hasMoved.set(True)
+
+
+        self.inf.setMousePos((e.x, e.y))
+        self.inf.setID(widget.find_overlapping(x1=e.x-2, y1=e.y-2, x2=e.x+2, y2=e.y+2))
+        self.inf.updateInfoBar()
+        
+        if self.isEditing.get():
+            self.edit_mousePos(e)
+            return
+
+        if self.isPressed.get():
+            self.coords[2], self.coords[3] = e.x, e.y
+            
+            if self.radioVar.get() == 0: 
+                if self.shapeID != None: widget.delete(self.shapeID)
+                self.shapeID = widget.create_line(list(self.coords))
+            elif self.radioVar.get() == 1:
+                if self.shapeID != None: widget.delete(self.shapeID)
+                self.shapeID = widget.create_arc(list(self.coords), start=self.calculateArc(self.coords)[0], extent=self.calculateArc(self.coords)[1], style='arc')
+            elif self.radioVar.get() == 2:
+                if self.shapeID != None: widget.delete(self.shapeID)
+                self.shapeID = widget.create_oval(list(self.coords))
+            elif self.radioVar.get() == 3:
+                if self.shapeID != None: widget.delete(self.shapeID)
+                self.shapeID = widget.create_rectangle(list(self.coords))
+            elif self.radioVar.get() == 4:
+                self.freeDrawPointIDs.append(self.canvas.create_oval(e.x, e.y, e.x, e.y, width=3))
+                if len(self.freeDrawPointIDs) > 1: 
+                    prevCoords = self.canvas.coords(self.freeDrawPointIDs[-2])[0:2]    
+                    widget.create_line(list(prevCoords + list(self.coords[2:])), width=3)
+
+
+            elif self.radioVar.get() == 6:
+                if self.shapeID != None and type(self.shapeID) == list: [widget.delete(id) for id in self.shapeID]
+                elif self.shapeID != None: widget.delete(id)
+                #self.shapeID = widget.create_line(self.pathPoints[-2:] + list(self.coords[-2:]))
+
+                
+                if self.pathPointInfo[-1][0] in ['L', 'M']: 
+                    
+                    xStart, yStart = self.pathPoints[-4], self.pathPoints[-3]
+                    x1, y1 = self.pathPoints[-4], self.pathPoints[-3]
+                    x2, y2 = e.x, e.y
+                    xEnd, yEnd = self.pathPoints[-2:]
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    self.shapeID = self.canvasPointSmoother(xPoints, yPoints)
+
+                elif ( len(self.pathPointInfo[-1]) == 7 and self.pathPointInfo[-1][0] == 'C' ) or ( len(self.pathPointInfo[-1]) == 5 and self.pathPointInfo[-1][0] == 'S' ):
+
+                    from pointList import Vec2D
+                    vecStart = Vec2D(self.pathPoints[-4], self.pathPoints[-3], 'rec')
+                    vecPrevX1 = Vec2D(self.pathPointInfo[-1][-4], self.pathPointInfo[-1][-3], 'rec')
+
+                    relVec = -1*vecStart + vecPrevX1
+                    oppVec = -1*relVec
+                    posVec = vecStart + oppVec
+
+                    xStart, yStart = vecStart.vec.x, vecStart.vec.y
+                    x1, y1 = posVec.vec.x, posVec.vec.y
+                    x2, y2 = self.coords[-2:]
+                    xEnd, yEnd = self.pathPoints[-2:]
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    self.shapeID = self.canvasPointSmoother(xPoints, yPoints)
+
+                    
+                elif len(self.pathPointInfo[-1]) == 5 and self.pathPointInfo[-1][0] == 'C':
+
+                    xStart, yStart = self.pathPointInfo[-2][-2:]
+                    x1, y1 = self.pathPointInfo[-1][1:3]
+                    x2, y2 = self.coords[-2:]
+                    xEnd, yEnd = self.pathPointInfo[-1][-2:]
+                    
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    self.shapeID = self.canvasPointSmoother(xPoints, yPoints)
+
+
+                """from shapePath import CubicCurve
+                if len(self.pathPointInfo) < 2: return
+                if len(self.pathPointInfo[-1]) < 7:
+
+                    xStart, yStart = self.pathPointInfo[-2][-2:]
+                    x1, y1 = self.pathPointInfo[-1][1:3]
+                    x2, y2 = self.coords[-2:]#self.pathPointInfo[-1][3:5]
+                    xEnd, yEnd = self.pathPointInfo[-1][-2:]
+
+                    #testCurve.xStart = [testCurve.xStart]
+                    #testCurve.yStart = [testCurve.yStart]
+                    #testCurve.x1 = [testCurve.x1]
+                    #testCurve.y1 = [testCurve.y1]
+                    #testCurve.x2 = [testCurve.x2]
+                    #testCurve.y2 = [testCurve.y2]
+                    #testCurve.xEnd = [testCurve.xEnd]
+                    #testCurve.yEnd = [testCurve.yEnd]
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    self.shapeID = self.canvasPointSmoother(xPoints, yPoints)
+
+                elif len(self.pathPointInfo[-1]) == 7 and self.pathPointInfo[-1][0] == 'C':
+                    from pointList import Vec2D
+                    vecStart = Vec2D(self.pathPointInfo[-2][-2], self.pathPointInfo[-2][-1], 'rec')
+                    vecPrevX1 = Vec2D(self.pathPointInfo[-2][-4], self.pathPointInfo[-2][-3], 'rec')
+
+                    relVec = -1*vecStart + vecPrevX1
+                    oppVec = -1*relVec
+                    posVec = vecStart + oppVec
+                    
+                    xStart, yStart = self.pathPointInfo[-2][-2:]
+                    x1, y1 = posVec.vec.x, posVec.vec.y
+                    x2, y2 = self.coords[-2:]
+                    xEnd, yEnd = self.pathPointInfo[-1][-2:]
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    self.shapeID = self.canvasPointSmoother(xPoints, yPoints)"""
+
+
+            elif self.radioVar.get() == 9:
+                xpad = 2
+                ypad = 2
+                
+                closestElements = widget.find_overlapping(x1=e.x-xpad, y1=e.y-ypad, x2=e.x+xpad, y2=e.y+ypad)
+                if len(closestElements) > 0:
+                    widget.delete(closestElements[0])
+                    if closestElements[0] in self.drawingElementIDs: 
+                        del self.drawingElementIDs[self.drawingElementIDs.index(closestElements[0])]
+                    del self.elementTypes[closestElements[0]]
+        
+        else:
+            if self.radioVar.get() == 5: 
+                if self.coords[0] != 0 and self.coords[1] != 0: self.coords[2], self.coords[3] = e.x, e.y
+
+                if self.shapeID != None: widget.delete(self.shapeID)
+                self.shapeID = widget.create_line(list(self.coords))
+
+            elif self.radioVar.get() == 6:
+                if self.shapeID != None and type(self.shapeID) == list: [widget.delete(id) for id in self.shapeID]
+                elif self.shapeID != None: widget.delete(self.shapeID)
+
+
+                if len(self.pathPointInfo) == 0: return
+                if self.pathPointInfo[-1][0] not in ['C', 'S']:
+                    if self.pathPointInfo[-1][0] in ['L', 'M']: 
+
+                        xStart, yStart = self.pathPoints[-2], self.pathPoints[-1]
+                        x1, y1 = self.pathPoints[-2], self.pathPoints[-1]
+                        x2, y2 = e.x, e.y
+                        xEnd, yEnd = e.x, e.y
+
+                        xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                        self.shapeID = self.canvasPointSmoother(xPoints, yPoints)
+                    
+                    #else: self.shapeID = widget.create_line(self.pathPoints[-2], self.pathPoints[-1], e.x, e.y)
+                
+                elif ( len(self.pathPointInfo[-1]) == 7 and self.pathPointInfo[-1][0] == 'C' ) or ( len(self.pathPointInfo[-1]) == 5 and self.pathPointInfo[-1][0] == 'S' ):
+
+                    from pointList import Vec2D
+                    vecStart = Vec2D(self.pathPoints[-2], self.pathPoints[-1], 'rec')
+                    vecPrevX1 = Vec2D(self.pathPointInfo[-1][-4], self.pathPointInfo[-1][-3], 'rec')
+
+                    relVec = -1*vecStart + vecPrevX1
+                    oppVec = -1*relVec
+                    posVec = vecStart + oppVec
+
+                    xStart, yStart = vecStart.vec.x, vecStart.vec.y
+                    x1, y1 = posVec.vec.x, posVec.vec.y
+                    x2, y2 = e.x, e.y
+                    xEnd, yEnd = e.x, e.y
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    self.shapeID = self.canvasPointSmoother(xPoints, yPoints)
+
+                elif len(self.pathPointInfo[-1]) == 3 and self.pathPointInfo[-1][0] == 'C':
+                    xStart, yStart = self.pathPoints[-2:]
+                    x1, y1 = self.pathPointInfo[-1][1:3]
+                    x2, y2 = e.x, e.y
+                    xEnd, yEnd = e.x, e.y
+                    
+                    xPoints, yPoints = self.cubicBezierCurvePoints(xStart, yStart, x1, y1, x2, y2, xEnd, yEnd)
+                    self.shapeID = self.canvasPointSmoother(xPoints, yPoints)
+
+
+        #removeColour = tk.Button(drawingFrame, text='Clear Canvas', command=lambda: [[p.configure(background='blue') for p in r] for r in pixels])
+        #removeColour.pack()
+    def edit_mousePos(self, e):
+        if self.isPressed.get():
+            if self.radioVar.get() == 6:
+                [self.canvas.delete(id) for id in self.editSelectedIDs]
+
+                if len(self.edit_shapeID) > 0: 
+                    for id in self.edit_shapeID:
+                        if type(id) != list: 
+                            self.canvas.delete(id)
+                        else: [self.canvas.delete(d) for d in id]
+
+
+
+                self.edit_shapeID.append(self.edit_create_point([e.x, e.y]))
+
+                cmdType, prevCmdData, cmdData, nextCmdData = self.cmdFinder(self.edit_key, self.edit_editingPoint)
+
+                #print('cmdData:', cmdData)
+                #print('prevCmdData:', prevCmdData)
+                from pointList import Vec2D
+
+                if cmdType == 'C':
+                    xPoints, yPoints = self.cubicBezierCurvePoints(prevCmdData[-2], prevCmdData[-1], cmdData[1], cmdData[2], cmdData[3], cmdData[4], e.x, e.y)
+                    self.edit_shapeID.append(self.canvasPointSmoother(xPoints, yPoints))
+                    
+                    self.edit_info[', '.join([str(d) for d in cmdData])] = [cmdType, cmdData[1], cmdData[2], cmdData[3], cmdData[4], e.x, e.y]
+                elif cmdType == 'S':
+                    vecStart = Vec2D(prevCmdData[-2], prevCmdData[-1], 'rec')
+                    vecPrevX1 = Vec2D(prevCmdData[-4], prevCmdData[-3], 'rec')
+
+                    relVec = -1*vecStart + vecPrevX1
+                    oppVec = -1*relVec
+                    posVec = vecStart + oppVec
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(vecStart.vec.x, vecStart.vec.y, posVec.vec.x, posVec.vec.y, cmdData[-4], cmdData[-3], e.x, e.y)
+                    self.edit_shapeID.append(self.canvasPointSmoother(xPoints, yPoints))
+
+                    self.edit_info[', '.join([str(d) for d in cmdData])] = [cmdType, cmdData[-4], cmdData[-3], e.x, e.y]
+
+                if nextCmdData[0] == 'S':
+                    vecStart = Vec2D(e.x, e.y, 'rec')
+                    vecPrevX1 = Vec2D(cmdData[-4], cmdData[-3], 'rec')
+
+                    relVec = -1*vecStart + vecPrevX1
+                    oppVec = -1*relVec
+                    posVec = vecStart + oppVec
+
+                    xPoints, yPoints = self.cubicBezierCurvePoints(e.x, e.y, posVec.vec.x, posVec.vec.y, nextCmdData[-4], nextCmdData[-3], nextCmdData[-2], nextCmdData[-1])
+                    self.edit_shapeID.append(self.canvasPointSmoother(xPoints, yPoints))
+
+                    #self.edit_info[', '.join([str(d) for d in cmdData])] = [cmdType, nextCmdData[-4], nextCmdData[-3], nextCmdData[-2], nextCmdData[-1]]
+
+
+    def cubicBezierCurvePoints(self, xStart, yStart, x1, y1, x2, y2, xEnd, yEnd):
+        xPoints = []
+        yPoints = []
+
+        for t in range(0, const.CURVE_SAMPLE_POINTS + 1, 1):
+            t /= const.CURVE_SAMPLE_POINTS
+            xPoint = (((1 - t) ** 3) * xStart) + (3 * t * ((1 - t) ** 2) * (x1)) + (
+                    3 * (t ** 2) * (1 - t) * (x2)) + (t ** 3 * (xEnd))
+            yPoint = (((1 - t) ** 3) * yStart) + (3 * t * ((1 - t) ** 2) * (y1)) + (
+                    3 * (t ** 2) * (1 - t) * (y2)) + (t ** 3 * (yEnd))
+            xPoints.append(xPoint)
+            yPoints.append(yPoint)
+
+        return xPoints, yPoints
+
+    def canvasPointSmoother(self, xArray, yArray):
+        idList = []
+        for i in range(int(len(xArray) - 1)):
+            idList.append(self.canvas.create_line(xArray[i], yArray[i], xArray[i+1], yArray[i+1]))
+
+        return idList
+
+    def keyToList(self, key):
+        pathIDs = key
+        insides = re.compile(r'''\[
+                    ([ ,0-9]+)
+                    \]''', re.VERBOSE)
+        search = re.findall(insides, pathIDs)
+        
+        IDs = []
+        [IDs.append([int(id) for id in found.split(', ')]) for found in search]
+
+        return IDs
+
+    def cmdFinder(self, key, point):
+        cmdType = ''
+        prevCmdData = []
+        cmdData = []
+        nextCmdData = []
+
+        if key != '':
+            data = self.elementData[key]
+            
+            for i in range(len(data)):
+                cmd = data[i]
+                if i != 0: prevCmdData = data[i-1]
+                if i != len(data): nextCmdData = data[i+1]
+
+                points = []
+                for i in range(len(cmd[1:]) - 1):
+                    points.append([cmd[i + 1], cmd[i + 2]])
+
+                if point in points:
+                    cmdData = cmd
+                    cmdType = cmd[0]
+                    break
+
+        return cmdType, prevCmdData, cmdData, nextCmdData
+
+    def get_header(self, svgHeight, svgWidth):
+        return f'<svg height=\"{svgHeight}\" width=\"{svgWidth}\">'
+        
+    def get_footer(self):
+        return '</svg>'
+
+
+    def saveAsFile(self):
+        svgElements = []
+        svgElements.append(self.get_header(self.canvas.cget('width'), self.canvas.cget('height')))
+
+        print(self.drawingElementIDs)
+        for id in self.drawingElementIDs:
+            if 'undone' in self.canvas.gettags(id): continue
+            if type(id) != list:
+                x1, y1, x2, y2 = self.canvas.coords(id)
+                width = x2-x1
+                height = y2-y1
+                centre = [x1 + width/2, y1 + height/2]
+                
+                if self.elementTypes[id] == 'rectangle':
+                    if x1 > x2: top_left_x = x2
+                    else: top_left_x = x1
+
+                    if y1 < y2: top_left_y = y2
+                    else: top_left_y = y1
+
+                    svgElements.append(str(self.svg(self.elementTypes[id], x=top_left_x, y=top_left_y, width=width, height=height)))
+
+                elif self.elementTypes[id] == 'line':
+                    svgElements.append(str(self.svg(self.elementTypes[id], x=x1, y=y1, x2=x2, y2=y2)))
+
+                elif self.elementTypes[id] == 'ellipse':
+                    svgElements.append(str(self.svg(self.elementTypes[id], x=centre[0], y=centre[1], width=width, height=height)))
+
+                #elif elementTypes[id] == 'arc':
+                    #svgElements.append(str(svg(elementTypes[id], x)))
+            else:
+                key = ', '.join([str(i) for i in id])
+
+                if self.elementTypes[key] == 'polyline':
+                    pointData = []
+                    [pointData.extend(self.canvas.coords(i)[0:2]) for i in id]
+                    pointData.extend(self.canvas.coords(id[-1])[2:4])
+                    svgElements.append(str(self.svg(self.elementTypes[key], pointData=pointData)))
+
+                elif self.elementTypes[key] == 'path':
+                    svgElements.append(str(self.svg(self.elementTypes[key], pointData=self.elementData[key])))
+
+        svgElements.append(self.get_footer())
+
+        data = '\n'.join(svgElements)
+
+        self.parent.fileSaveCheck('./sgvFiles', 'svg', data)
+        # io.writeFileData('./sgvFiles/savedFile.svg', data)
+            
+
+    class svg():
+        def __init__(self, shape, x=None, y=None, x2=None, y2=None, width=0, height=0, pointData: list =[]):
+            self.shape = shape
+            self.x = x
+            self.y = y
+            self.x2 = x2
+            self.y2 = y2
+            self.width = width
+            self.height = height
+            self.pointData = pointData
+
+        def __str__(self):
+            if self.shape == 'rectangle':
+                return f'<rect x=\"{self.x}\" y=\"{self.y}\" width=\"{self.width}\" height=\"{self.height}\"/>'
+            elif self.shape == 'line':
+                return f'<line x1=\"{self.x}\" x2=\"{self.x2}\" y1=\"{self.y}\" y2=\"{self.y2}\"/>'
+            elif self.shape == 'ellipse':
+                return f'<ellipse cx=\"{self.x}\" cy=\"{self.y}\" rx=\"{self.width/2}\" ry=\"{self.height/2}\"/>'
+            
+            
+            elif self.shape == 'polyline':
+                return f'<polyline points=\"{" ".join([ str(point) for point in self.pointData])}\"/>'
+            elif self.shape == 'path':
+                return f'<path d=\"{" ".join( [ " ".join([ str(arg) for arg in cmd]) for cmd in self.pointData] )}\"/>'
+
+    class info():
+        def __init__(self, infoBar, infoBarText, selected=''):
+            self.infoBar = infoBar
+            self.infoBarText = infoBarText
+            self.selected = selected
+            self.mousePos = (0, 0)
+            self.ID = 0
+            self.editing = False
+            self.textCreator()
+        
+        def textCreator(self):
+            self.text = {
+
+                'Currently Selected: ': self.selected,
+                'Mouse Pos: ': self.mousePos,
+                'Id: ': self.ID,
+                'Currently Editing: ': self.editing
+
+            }
+            
+            
+        def setMousePos(self, mousePos):
+            self.mousePos = mousePos
+            self.text['Mouse Pos: '] = self.mousePos
+
+        def setSelected(self, selected):
+            self.selected = selected
+            self.text['Currently Selected: '] = self.selected
+
+        def setID(self, ID):
+            self.ID = ID
+            self.text['Id: '] =self.ID
+
+        def setEditing(self, editing):
+            self.editing = editing
+            self.text['Currently Editing: '] = self.editing
+
+        def updateInfoBar(self):
+            combinedText = []
+            for key in self.text:
+                combinedText.append(key + str(self.text[key]))
+
+            self.infoBarText.set('\n'.join(combinedText))
 
 
 if __name__ == '__main__':
