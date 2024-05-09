@@ -260,7 +260,8 @@ class MainFrame(tk.Frame):
             #global logContents
             #logContents = log.log.dLog
         except Exception as e:
-            print(e)
+            log.log.newLog("error", str(e))
+            mb.showerror("ERROR", "There was an error with the plotting:\n\n" + str(e))
 
     def setupVariablesPage(self):
         self.master.add(self.parent.frameDict[VariablesFrame], text='Variables')
